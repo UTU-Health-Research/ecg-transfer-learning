@@ -112,6 +112,13 @@ class Training(object):
         history['criterion'] = self.criterion
         
         start_time_sec = time.time()
+        start_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time_sec))
+        print("Training started:", start_time)
+        
+        # For early stopping
+        patience = 15
+        best_val_macro_auc = 0.0
+        epochs_without_improvement = 0
         
         for epoch in range(1, self.args.epochs+1):
             # --- TRAIN ON TRAINING SET ------------------------------------------
@@ -164,11 +171,12 @@ class Training(object):
             train_loss = train_loss / len(self.train_dl.dataset)            
             train_macro_avg_prec, train_micro_avg_prec, train_macro_auroc, train_micro_auroc = cal_multilabel_metrics(labels_all, logits_prob_all, self.args.labels, self.args.threshold)
 
-            self.args.logger.info('epoch {:^4}/{:^4} train loss: {:<6.2f}  train micro auroc: {:<6.2f}'.format( 
+            self.args.logger.info('epoch {:^4}/{:^4} train loss: {:<6.2f}  train micro auroc: {:<6.2f}  train macro auroc: {:<6.2f}'.format( 
                 epoch, 
                 self.args.epochs, 
-                train_loss, 
-                train_micro_auroc))
+                train_loss,
+                train_micro_auroc,
+                train_macro_auroc))
 
             # Add information for training history
             history['train_loss'].append(train_loss)
@@ -201,36 +209,52 @@ class Training(object):
                 val_loss = val_loss / len(self.val_dl.dataset)
                 val_macro_avg_prec, val_micro_avg_prec, val_macro_auroc, val_micro_auroc = cal_multilabel_metrics(labels_all, logits_prob_all, self.args.labels, self.args.threshold)
             
-                self.args.logger.info('                val loss:  {:<6.2f}   val micro auroc: {:<6.2f}   '.format(
+                self.args.logger.info('                val loss:  {:<6.2f}   val micro auroc: {:<6.2f}   val macro auroc: {:<6.2f}   '.format(
                     val_loss,
-                    val_micro_auroc))
+                    val_micro_auroc,
+                    val_macro_auroc))
                 
                 history['val_loss'].append(val_loss)
                 history['val_micro_auroc'].append(val_micro_auroc)
                 history['val_micro_avg_prec'].append(val_micro_avg_prec)         
                 history['val_macro_auroc'].append(val_macro_auroc)  
                 history['val_macro_avg_prec'].append(val_macro_avg_prec)
+                
+                print("Training Loss: %.5f. Validation loss: %.5f. Validation Macro AUC: %.5f." % (train_loss, val_loss, val_macro_auroc))
+                
+                # Early stopping
+                if val_macro_auroc > best_val_macro_auc:
+                    best_val_macro_auc = val_macro_auroc
+                    model_state_dict = self.model.module.state_dict() if self.device_count > 1 else self.model.state_dict()
+
+                    # -- Save model every time best validation macro AUC is found
+                    model_savepath = os.path.join(self.args.model_save_dir, self.args.yaml_file_name + '_best.pth')
+                    torch.save(model_state_dict, model_savepath)
+                    epochs_without_improvement = 0
+                else:
+                    epochs_without_improvement += 1
+                    print("Best val macro AUC: %.5f." % (best_val_macro_auc))
+                    print("No improvement: {}".format(epochs_without_improvement))
 
             # --------------------------------------------------------------------
 
-            # Create ROC Curves at the beginning, middle and end of training
-            if epoch == 1 or epoch == self.args.epochs/2 or epoch == self.args.epochs:
-                roc_curves(labels_all, logits_prob_all, self.args.labels, epoch, self.args.roc_save_dir)
-
+            # Create ROC Curves for manual checking
+            roc_curves(labels_all, logits_prob_all, self.args.labels, epoch, self.args.roc_save_dir)
+            
             # Save a model at every 5th epoch (backup)
             if epoch in list(range(self.args.epochs)[0::5]):
                 self.args.logger.info('Saved model at the epoch {}!'.format(epoch))
                 # Whether or not you use data parallelism, save the state dictionary this way
                 # to have the flexibility to load the model any way you want to any device you want
                 model_state_dict = self.model.module.state_dict() if self.device_count > 1 else self.model.state_dict()
-                    
-                # -- Save model
-                model_savepath = os.path.join(self.args.model_save_dir,
-                                              self.args.yaml_file_name + '_e' + str(epoch) + '.pth')
-                torch.save(model_state_dict, model_savepath)
 
-            # Save trained model (.pth), history (.pickle) and validation logits (.csv) after the last epoch
-            if epoch == self.args.epochs:
+                # -- Save model backup
+                model_savepath = os.path.join(self.args.model_save_dir, self.args.yaml_file_name + '_backup.pth')
+                torch.save(model_state_dict, model_savepath)
+                print("Model backup saved at epoch: ", epoch)
+
+            # Save trained model (.pth), history (.pickle) and validation logits (.csv) after the last epoch or when patience is reached
+            if epoch == self.args.epochs or epochs_without_improvement >= patience:
                 
                 self.args.logger.info('Saving the model, training history and validation logits...')
                     
@@ -241,7 +265,9 @@ class Training(object):
                 # -- Save model
                 model_savepath = os.path.join(self.args.model_save_dir,
                                               self.args.yaml_file_name  + '.pth')
+                
                 torch.save(model_state_dict, model_savepath)
+                print("Model saved at: ", model_savepath)
                 
                 # -- Save history
                 history_savepath = os.path.join(self.args.model_save_dir,
@@ -275,6 +301,13 @@ class Training(object):
                 logits_numpy = logits_prob_all.cpu().detach().numpy().astype(np.float32)
                 logits_df = pd.DataFrame(logits_numpy, columns=self.args.labels, index=filenames)
                 logits_df.to_csv(logits_csv_path, sep=',')
+                
+                # Early stopping. Break loop once patience is reached.
+                if epochs_without_improvement >= patience:
+                    self.args.logger.info('Patience reached. Training stopped at epoch {}'.format(epoch))
+                    print("Best val macro AUC: %.5f." % (best_val_macro_auc))
+                    print(f'Early stopping triggered after {epoch + 1} epochs.')
+                    break
 
             del logits_prob_all
             del labels_all
@@ -287,3 +320,9 @@ class Training(object):
         time_per_epoch_sec = total_time_sec / self.args.epochs
         self.args.logger.info('Time total:     %5.2f sec' % (total_time_sec))
         self.args.logger.info('Time per epoch: %5.2f sec' % (time_per_epoch_sec))
+        
+        # Print training duration data
+        end_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time_sec))
+        print("Training finished:", end_time)
+        print('Time total:     %5.2f sec' % (total_time_sec))
+        print('Time per epoch: %5.2f sec' % (time_per_epoch_sec))
