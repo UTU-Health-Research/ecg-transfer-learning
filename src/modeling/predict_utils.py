@@ -9,6 +9,7 @@ from .models.seresnet18 import resnet18
 from ..dataloader.dataset import ECGDataset, get_transforms
 from .metrics import cal_multilabel_metrics, roc_curves
 import pickle
+from pathlib import Path
 
 class Predicting(object):
     def __init__(self, args):
@@ -101,6 +102,8 @@ class Predicting(object):
             test_macro_auroc,
             test_micro_auroc))
         
+        print("YAML: ", self.args.yaml_file_name)
+        print("Test Macro AUC: ", test_macro_auroc)
         # Draw ROC curve for predictions
         roc_curves(labels_all, logits_prob_all, self.args.labels, save_path = self.args.output_dir)
         
@@ -130,9 +133,29 @@ class Predicting(object):
         labels_numpy = labels_all.cpu().detach().numpy().astype(np.float32)
         labels_df = pd.DataFrame(labels_numpy, columns=self.args.labels, index=filenames)
         labels_df.to_csv(labels_csv_path, sep=',')
+        
+        # ---- Save macro AUROC to summary csv (one row, append mode) ----
+        # Each row contains: yaml_file_name, test_macro_auroc
+        p = Path(self.args.output_dir)
+        parent_dir = p.parent
+        auc_csv_path = os.path.join(parent_dir, 'summary_auc.csv')
+        result_row = {
+            'yaml_file_name': self.args.yaml_file_name,
+            'test_macro_auroc': test_macro_auroc
+        }
+        # If file does not exist, write header, else just append
+        write_header = not os.path.exists(auc_csv_path)
+        pd.DataFrame([result_row]).to_csv(auc_csv_path, mode='a', header=write_header, index=False)
             
         torch.cuda.empty_cache()
         
         end_time_sec = time.time()
         total_time_sec = end_time_sec - start_time_sec
         self.args.logger.info('Time total:     %5.2f sec' % (total_time_sec))
+        
+        # Print training duration data
+        start_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time_sec))
+        print("Training started:", start_time)
+        end_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time_sec))
+        print("Training finished:", end_time)
+        print('Time total:     %5.2f sec' % (total_time_sec))
