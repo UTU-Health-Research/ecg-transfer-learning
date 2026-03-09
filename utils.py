@@ -1,5 +1,8 @@
 import json
 import yaml
+import torch
+import numpy as np
+import random
 
 class obj:
     def __init__(self, dict1):
@@ -16,3 +19,22 @@ def load_yaml(yaml_file):
         args = yaml.safe_load(file)          
     
     return dict2obj(args)
+
+# Set seeds
+def set_seeds(seed: int=2025):
+    """Sets random sets for torch operations.
+
+    Args:
+        seed (int, optional): Random seed to set. Defaults to 2025.
+    """
+    # Set the seed for general torch operations
+    torch.manual_seed(seed)
+    # Set the seed for CUDA torch operations (ones that happen on the GPU)
+    torch.cuda.manual_seed(seed)
+
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
