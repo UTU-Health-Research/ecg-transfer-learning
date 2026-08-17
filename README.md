@@ -74,6 +74,26 @@ To run fine-tuning, the following code can be run in terminal. The first argumen
 python finetune_model.py <finetuning_yaml_or_dir> <source_model_dir_name>
 ```
 
+## Freezing / Unfreezing layers
+
+Edit the script **finetune_utils.py** to specify the layers to be frozen and unfrozen during the fine-tuning process.
+
+Example snipped for freezing all the layers:
+```
+# Freeze model parameters
+        for param in self.model.parameters():
+            param.requires_grad = False
+```
+            
+Example snippet for unfreezing the last two layers of the pretrained ResNet model:
+```
+# Unfreeze the last two layers
+        for name, child in self.model.named_children():
+            if "layer4" in name or "fc" in name or "fc1" in name:
+                for param in child.parameters():
+                    param.requires_grad = True
+```
+
 # Citation
 
 ```
