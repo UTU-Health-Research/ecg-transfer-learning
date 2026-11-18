@@ -105,6 +105,7 @@ Example snippet for unfreezing the last two layers of the pretrained ResNet mode
   address={Limassol, Cyprus},
   year={2026},
   publisher={IEEE},
-  month={June}
+  month={June},
+  doi={10.1109/CBMS69103.2026.00279}
 }
 ```
